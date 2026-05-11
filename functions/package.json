@@ -1,0 +1,26 @@
+{
+  "name": "gps-attendance-functions",
+  "private": true,
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint --ext .js,.ts .",
+    "serve": "npm run build && firebase emulators:start --only functions,firestore",
+    "deploy": "firebase deploy --only functions,firestore"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "dependencies": {
+    "firebase-admin": "latest",
+    "firebase-functions": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@typescript-eslint/eslint-plugin": "latest",
+    "@typescript-eslint/parser": "latest",
+    "eslint": "latest",
+    "eslint-config-google": "latest",
+    "typescript": "latest"
+  }
+}

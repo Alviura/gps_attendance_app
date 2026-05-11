@@ -1,0 +1,46 @@
+{
+  "firestore": {
+    "database": "(default)",
+    "location": "africa-south1",
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log"
+      ],
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run build"
+      ]
+    }
+  ],
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "gps-attendance-app-cf827",
+          "appId": "1:1096894998638:android:e3b318ade07c0684491e7f",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "gps-attendance-app-cf827",
+          "configurations": {
+            "android": "1:1096894998638:android:e3b318ade07c0684491e7f",
+            "ios": "1:1096894998638:ios:faa1032053095004491e7f",
+            "macos": "1:1096894998638:ios:faa1032053095004491e7f",
+            "web": "1:1096894998638:web:2107a54db0a45fd1491e7f",
+            "windows": "1:1096894998638:web:2f5bfeec7a48c983491e7f"
+          }
+        }
+      }
+    }
+  }
+}

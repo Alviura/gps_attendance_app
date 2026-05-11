@@ -1,30 +1,51 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:gps_attendance_app/main.dart';
+import 'package:gps_attendance_app/app/gps_attendance_app.dart';
+import 'package:gps_attendance_app/services/backend_status.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('shows GPS attendance login screen', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const GpsAttendanceApp(backendStatus: BackendStatus.demo()),
+    );
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    expect(find.text('GPS Student Attendance'), findsOneWidget);
+    expect(find.text('Email'), findsOneWidget);
+    expect(find.text('Sign in'), findsOneWidget);
+  });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+  testWidgets('demo login opens dashboard', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const GpsAttendanceApp(backendStatus: BackendStatus.demo()),
+    );
+
+    final signInButton = find.text('Sign in');
+    await tester.ensureVisible(signInButton);
+    await tester.tap(signInButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Welcome, Demo Student'), findsOneWidget);
+    expect(find.text('Account: demo_student'), findsOneWidget);
+  });
+
+  testWidgets('demo admin email opens admin shell', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const GpsAttendanceApp(backendStatus: BackendStatus.demo()),
+    );
+
+    final emailField = find.byType(TextFormField).first;
+    await tester.enterText(emailField, 'admin@example.edu');
     await tester.pump();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    final signInButton = find.text('Sign in');
+    await tester.ensureVisible(signInButton);
+    await tester.tap(signInButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Admin'), findsOneWidget);
+    expect(
+      find.textContaining('admin screen is Firebase-specific'),
+      findsOneWidget,
+    );
   });
 }

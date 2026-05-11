@@ -1,0 +1,165 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function lecturerRegDocIdValid(regKey) {
+      return regKey.size() >= 4 && regKey.size() <= 24
+        && regKey.matches('^[A-Z0-9\\-]+$');
+    }
+
+    function callerIsAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function callerIsActiveLecturer() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'lecturer'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.lecturerStatus == 'active';
+    }
+
+    function callerIsStudent() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student';
+    }
+
+    // ── Users ─────────────────────────────────────────────────────────
+    match /users/{userId} {
+      allow read: if (signedIn() && request.auth.uid == userId) || callerIsAdmin();
+
+      allow create: if isSelf(userId)
+        && request.resource.data.name is string
+        && request.resource.data.email is string
+        && (
+          (
+            request.resource.data.role == 'student'
+            && !('lecturerRegNo' in request.resource.data)
+          )
+          || (
+            request.resource.data.role == 'lecturer'
+            && request.resource.data.lecturerStatus == 'pending'
+            && (!('matricNumber' in request.resource.data) || request.resource.data.matricNumber == null)
+            && request.resource.data.lecturerRegNo is string
+            && lecturerRegDocIdValid(request.resource.data.lecturerRegNo)
+            && request.resource.data.enrolledClassIds is list
+            && request.resource.data.enrolledClassIds.size() == 0
+            && existsAfter(/databases/$(database)/documents/lecturer_registrations/$(request.resource.data.lecturerRegNo))
+            && getAfter(/databases/$(database)/documents/lecturer_registrations/$(request.resource.data.lecturerRegNo)).data.uid == request.auth.uid
+          )
+        );
+
+      allow update: if
+        // Admin updates lecturer approval status
+        (callerIsAdmin()
+          && resource.data.role == 'lecturer'
+          && request.resource.data.role == 'lecturer'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lecturerStatus'])
+          && request.resource.data.lecturerStatus in ['active', 'pending', 'rejected'])
+        // Student updates their own enrolled class list when joining a class
+        || (isSelf(userId)
+          && resource.data.role == 'student'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['enrolledClassIds']));
+
+      allow delete: if false;
+    }
+
+    // ── Lecturer registrations (reg-number uniqueness claim) ──────────
+    match /lecturer_registrations/{regKey} {
+      allow read: if false;
+      allow update, delete: if false;
+      allow create: if signedIn()
+        && !exists(/databases/$(database)/documents/lecturer_registrations/$(regKey))
+        && lecturerRegDocIdValid(regKey)
+        && request.resource.data.keys().hasOnly(['uid', 'lecturerRegNo', 'createdAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.lecturerRegNo == regKey;
+    }
+
+    // ── Classes ───────────────────────────────────────────────────────
+    match /classes/{classId} {
+      allow read: if signedIn() && (
+        request.auth.uid in resource.data.enrolledStudentIds
+        || resource.data.lecturerId == request.auth.uid
+        || callerIsAdmin()
+      );
+
+      // Active lecturer creates a class they own
+      allow create: if callerIsActiveLecturer()
+        && request.resource.data.lecturerId == request.auth.uid
+        && request.resource.data.title is string
+        && request.resource.data.roomName is string
+        && request.resource.data.latitude is number
+        && request.resource.data.longitude is number
+        && request.resource.data.enrolledStudentIds is list
+        && request.resource.data.enrolledStudentIds.size() == 0;
+
+      // Student joins a class (only enrolledStudentIds may change)
+      allow update: if callerIsStudent()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['enrolledStudentIds']);
+
+      allow delete: if false;
+    }
+
+    // ── Sessions ──────────────────────────────────────────────────────
+    match /sessions/{sessionId} {
+      allow read: if signedIn() && (
+        request.auth.uid in resource.data.enrolledStudentIds
+        || resource.data.lecturerId == request.auth.uid
+        || callerIsAdmin()
+      );
+
+      // Active lecturer starts a session for their class
+      allow create: if callerIsActiveLecturer()
+        && request.resource.data.lecturerId == request.auth.uid
+        && request.resource.data.status == 'active';
+
+      // Lecturer ends their own session
+      allow update: if signedIn()
+        && resource.data.lecturerId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'closedAt'])
+        && request.resource.data.status == 'closed';
+
+      allow delete: if false;
+    }
+
+    // ── Attendance ────────────────────────────────────────────────────
+    match /attendance/{attendanceId} {
+      allow read: if signedIn()
+        && (resource.data.studentId == request.auth.uid || callerIsAdmin());
+
+      // Student marks their own attendance with biometric verification
+      allow create: if callerIsStudent()
+        && request.resource.data.studentId == request.auth.uid
+        && request.resource.data.verificationMethod == 'biometric'
+        && !exists(/databases/$(database)/documents/attendance/$(attendanceId));
+
+      allow update, delete: if false;
+    }
+
+    // ── Reports ───────────────────────────────────────────────────────
+    match /reports/{sessionId} {
+      allow read: if signedIn() && (
+        get(/databases/$(database)/documents/sessions/$(sessionId)).data.lecturerId == request.auth.uid
+        || request.auth.uid in get(/databases/$(database)/documents/sessions/$(sessionId)).data.enrolledStudentIds
+        || callerIsAdmin()
+      );
+
+      // Report is created or updated atomically when student marks attendance
+      allow create, update: if callerIsStudent();
+
+      allow delete: if false;
+    }
+  }
+}

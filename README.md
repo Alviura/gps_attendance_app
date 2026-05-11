@@ -1,17 +1,22 @@
-# gps_attendance_app
+# GPS Attendance App
 
-A new Flutter project.
+Flutter attendance app with GPS + biometric checks.
 
-## Getting Started
+## Backend modes
 
-This project is a starting point for a Flutter application.
+- `php` (default): calls the PHP/XAMPP backend in `php_backend/`
+- `demo`: in-memory demo without remote backend
 
-A few resources to get you started if this is your first Flutter project:
+Run with PHP backend:
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+```bash
+flutter run --dart-define=BACKEND_MODE=php --dart-define=API_BASE_URL=http://10.0.2.2/gps_attendance_api/api
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Run demo mode:
+
+```bash
+flutter run --dart-define=BACKEND_MODE=demo
+```
+
+For full PHP setup instructions, see `php_backend/README.md`.

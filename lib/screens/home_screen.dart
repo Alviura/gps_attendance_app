@@ -12,6 +12,7 @@ import 'join_class_screen.dart';
 import 'lecturer_shell.dart';
 import 'login_screen.dart';
 import 'pending_lecturer_screen.dart';
+import 'profile_screen.dart';
 import 'register_screen.dart';
 import 'reports_screen.dart';
 
@@ -178,62 +179,100 @@ class StudentShell extends StatefulWidget {
 
 class _StudentShellState extends State<StudentShell> {
   int _selectedIndex = 0;
+  // Incremented whenever attendance is submitted so DashboardScreen and
+  // ReportsScreen get fresh ValueKeys and fully reload their data.
+  int _dataVersion = 0;
+
+  void _onAttendanceSubmitted() {
+    setState(() {
+      _dataVersion++;
+      _selectedIndex = 0; // jump back to Home tab
+    });
+  }
+
+  String get _firstName {
+    final parts = widget.user.name.trim().split(' ');
+    return parts.isNotEmpty ? parts.first : widget.user.name;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     final pages = [
       DashboardScreen(
+        key: ValueKey('dashboard-$_dataVersion'),
         user: widget.user,
         attendanceRepository: widget.attendanceRepository,
         isDemo: widget.authService.isDemo,
         onMarkAttendance: () => setState(() => _selectedIndex = 1),
+        onJoinClass: widget.onJoinClass,
       ),
       AttendanceScreen(
         user: widget.user,
         attendanceRepository: widget.attendanceRepository,
+        onAttendanceSubmitted: _onAttendanceSubmitted,
       ),
       ReportsScreen(
+        key: ValueKey('reports-$_dataVersion'),
         user: widget.user,
         attendanceRepository: widget.attendanceRepository,
+      ),
+      ProfileScreen(
+        user: widget.user,
+        authService: widget.authService,
       ),
     ];
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('GPS Attendance'),
-        actions: [
-          IconButton(
-            tooltip: 'Join class',
-            onPressed: widget.onJoinClass,
-            icon: const Icon(Icons.group_add_outlined),
-          ),
-          IconButton(
-            tooltip: 'Sign out',
-            onPressed: widget.authService.signOut,
-            icon: const Icon(Icons.logout_rounded),
-          ),
-        ],
+        titleSpacing: 16,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Hello, $_firstName 👋',
+              style: const TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                height: 1.2,
+              ),
+            ),
+            Text(
+              'Student Portal',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w400,
+                color: colorScheme.onSurface.withOpacity(0.6),
+                height: 1.2,
+              ),
+            ),
+          ],
+        ),
       ),
       body: pages[_selectedIndex],
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
-        onDestinationSelected: (index) =>
-            setState(() => _selectedIndex = index),
+        onDestinationSelected: (i) => setState(() => _selectedIndex = i),
         destinations: const [
           NavigationDestination(
-            icon: Icon(Icons.dashboard_outlined),
-            selectedIcon: Icon(Icons.dashboard_rounded),
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home_rounded),
             label: 'Home',
           ),
           NavigationDestination(
-            icon: Icon(Icons.pin_drop_outlined),
-            selectedIcon: Icon(Icons.pin_drop_rounded),
+            icon: Icon(Icons.how_to_reg_outlined),
+            selectedIcon: Icon(Icons.how_to_reg_rounded),
             label: 'Attend',
           ),
           NavigationDestination(
-            icon: Icon(Icons.analytics_outlined),
-            selectedIcon: Icon(Icons.analytics_rounded),
+            icon: Icon(Icons.bar_chart_outlined),
+            selectedIcon: Icon(Icons.bar_chart_rounded),
             label: 'Reports',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.person_outline_rounded),
+            selectedIcon: Icon(Icons.person_rounded),
+            label: 'Profile',
           ),
         ],
       ),

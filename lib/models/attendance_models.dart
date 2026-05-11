@@ -98,6 +98,7 @@ class ClassSession {
     required this.latitude,
     required this.longitude,
     required this.radiusMeters,
+    this.alreadyAttended = false,
   });
 
   final String id;
@@ -110,6 +111,9 @@ class ClassSession {
   final double latitude;
   final double longitude;
   final double radiusMeters;
+  /// True when the signed-in student has already submitted attendance for
+  /// this session, so the dashboard can hide the "Mark attendance" button.
+  final bool alreadyAttended;
 }
 
 class AttendanceSubmission {
@@ -124,6 +128,19 @@ class AttendanceSubmission {
   final double? distanceMeters;
 }
 
+/// A single entry in a student's personal attendance history.
+class PersonalAttendanceEntry {
+  const PersonalAttendanceEntry({
+    required this.classTitle,
+    required this.markedAt,
+    required this.distanceMeters,
+  });
+
+  final String classTitle;
+  final DateTime markedAt;
+  final double distanceMeters;
+}
+
 class AttendanceReport {
   const AttendanceReport({
     required this.sessionTitle,
@@ -131,6 +148,7 @@ class AttendanceReport {
     required this.presentCount,
     required this.absentCount,
     required this.generatedAt,
+    this.entries = const [],
   });
 
   factory AttendanceReport.empty() {
@@ -139,7 +157,8 @@ class AttendanceReport {
       totalStudents: 0,
       presentCount: 0,
       absentCount: 0,
-      generatedAt: DateTime.now(),
+      generatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+      entries: const [],
     );
   }
 
@@ -148,11 +167,11 @@ class AttendanceReport {
   final int presentCount;
   final int absentCount;
   final DateTime generatedAt;
+  /// Per-student personal attendance records (newest first).
+  final List<PersonalAttendanceEntry> entries;
 
   double get attendanceRate {
-    if (totalStudents == 0) {
-      return 0;
-    }
+    if (totalStudents == 0) return 0;
     return presentCount / totalStudents;
   }
 }

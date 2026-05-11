@@ -202,6 +202,63 @@ class AuthService extends ChangeNotifier {
     // _onAuthStateChanged will fire and load the Firestore user doc
   }
 
+  /// Updates the user's editable profile fields (name for all; matricNumber
+  /// for students). Reloads the cached profile after a successful write.
+  Future<void> updateProfile({
+    required String name,
+    String? matricNumber,
+  }) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) throw const AttendanceException('Name cannot be empty.');
+
+    if (_backendStatus.isDemo) {
+      _currentUser = AppUser(
+        id: _currentUser!.id,
+        name: trimmed,
+        email: _currentUser!.email,
+        role: _currentUser!.role,
+        matricNumber: matricNumber?.trim().isEmpty == true
+            ? null
+            : matricNumber?.trim() ?? _currentUser!.matricNumber,
+        lecturerRegNo: _currentUser!.lecturerRegNo,
+        lecturerStatus: _currentUser!.lecturerStatus,
+        enrolledClassIds: _currentUser!.enrolledClassIds,
+      );
+      notifyListeners();
+      return;
+    }
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) throw const AttendanceException('Not signed in.');
+
+    final updates = <String, dynamic>{'name': trimmed};
+    if (_currentUser?.isStudent == true) {
+      final m = matricNumber?.trim();
+      updates['matricNumber'] = (m == null || m.isEmpty) ? null : m;
+    }
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .update(updates);
+      await reloadProfile();
+    } catch (e) {
+      throw AttendanceException('Could not save profile: $e');
+    }
+  }
+
+  /// Sends a password-reset email to the currently signed-in user's address.
+  Future<void> sendPasswordResetEmail() async {
+    final email = FirebaseAuth.instance.currentUser?.email;
+    if (email == null) throw const AttendanceException('No email on file.');
+    try {
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+    } on FirebaseAuthException catch (e) {
+      throw AttendanceException(_friendlyAuthMessage(e));
+    }
+  }
+
   Future<void> signOut() async {
     if (_backendStatus.isFirebase) {
       await FirebaseAuth.instance.signOut();

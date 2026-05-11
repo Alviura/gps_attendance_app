@@ -38,23 +38,30 @@ class LecturerActions {
 
     // Fetch lecturer display name
     final userSnap = await _db.collection('users').doc(uid).get();
-    final lecturerName =
-        userSnap.data()?['name'] as String? ?? 'Lecturer';
+    final lecturerName = userSnap.data()?['name'] as String? ?? 'Lecturer';
 
-    // Generate a unique 6-character join code
+    // Generate join code and write class + join_codes entry atomically.
+    // join_codes is readable by all signed-in users, so no cross-class
+    // query on the restricted classes collection is needed.
     String joinCode = _generateJoinCode();
+    final classRef = _db.collection('classes').doc();
+
     for (int attempt = 0; attempt < 5; attempt++) {
-      final dup = await _db
-          .collection('classes')
-          .where('joinCode', isEqualTo: joinCode)
-          .limit(1)
-          .get();
-      if (dup.docs.isEmpty) break;
+      final codeRef = _db.collection('join_codes').doc(joinCode);
+      final existing = await codeRef.get();
+      if (!existing.exists) break; // code is free
       joinCode = _generateJoinCode();
     }
 
-    final ref = _db.collection('classes').doc();
-    await ref.set({
+    final batch = _db.batch();
+    final codeRef = _db.collection('join_codes').doc(joinCode);
+    batch.set(codeRef, {
+      'classId': classRef.id,
+      'lecturerId': uid,
+      'title': title.trim(), // cached so students don't need to read classes/
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    batch.set(classRef, {
       'title': title.trim(),
       'roomName': roomName.trim(),
       'latitude': latitude,
@@ -66,8 +73,9 @@ class LecturerActions {
       'enrolledStudentIds': <String>[],
       'createdAt': FieldValue.serverTimestamp(),
     });
+    await batch.commit();
 
-    return {'classId': ref.id, 'joinCode': joinCode};
+    return {'classId': classRef.id, 'joinCode': joinCode};
   }
 
   // ── Session management ───────────────────────────────────────────────
@@ -78,6 +86,20 @@ class LecturerActions {
     int durationMinutes = 120,
   }) async {
     final uid = _uid();
+
+    // Enforce one-active-session-at-a-time per lecturer.
+    final activeSessions = await _db
+        .collection('sessions')
+        .where('lecturerId', isEqualTo: uid)
+        .where('status', isEqualTo: 'active')
+        .limit(1)
+        .get();
+    if (activeSessions.docs.isNotEmpty) {
+      throw const AttendanceException(
+        'You already have an active session running. '
+        'Please end it before starting another.',
+      );
+    }
 
     final classDoc = await _db.collection('classes').doc(classId).get();
     if (!classDoc.exists) {
@@ -116,35 +138,40 @@ class LecturerActions {
     });
   }
 
+  /// Updates only the location-related fields of a class the lecturer owns.
+  static Future<void> updateClassLocation({
+    required String classId,
+    required double latitude,
+    required double longitude,
+    required double radiusMeters,
+  }) async {
+    await _db.collection('classes').doc(classId).update({
+      'latitude': latitude,
+      'longitude': longitude,
+      'radiusMeters': radiusMeters,
+    });
+  }
+
   // ── Student joins a class ────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> joinClassByCode(String joinCode) async {
     final uid = _uid();
     final code = joinCode.trim().toUpperCase();
 
-    final snap = await _db
-        .collection('classes')
-        .where('joinCode', isEqualTo: code)
-        .limit(1)
-        .get();
-
-    if (snap.docs.isEmpty) {
+    // Look up via join_codes (readable by any signed-in user) — this avoids
+    // reading the classes/ doc, which requires enrolment or ownership.
+    final codeSnap = await _db.collection('join_codes').doc(code).get();
+    if (!codeSnap.exists) {
       throw const AttendanceException(
           'No class found with that join code. Please check and try again.');
     }
+    final codeData = codeSnap.data()!;
+    final classId = codeData['classId'] as String;
+    final classTitle = codeData['title'] as String? ?? 'Class';
 
-    final classDoc = snap.docs.first;
-    final classId = classDoc.id;
-    final classTitle =
-        classDoc.data()['title'] as String? ?? 'Class';
-
-    final enrolled = List<String>.from(
-      classDoc.data()['enrolledStudentIds'] as List? ?? [],
-    );
-    if (enrolled.contains(uid)) {
-      return {'classId': classId, 'title': classTitle};
-    }
-
+    // Batch-update both the class enrolment list and the student's profile.
+    // The classes update rule (callerIsStudent + only enrolledStudentIds changes)
+    // allows this even though the student can't read the class doc yet.
     final batch = _db.batch();
     batch.update(_db.collection('classes').doc(classId), {
       'enrolledStudentIds': FieldValue.arrayUnion([uid]),

@@ -11,6 +11,7 @@ abstract class AttendanceRepository {
     required ClassSession session,
     required double latitude,
     required double longitude,
+    double accuracy = 0,
   });
   Future<AttendanceReport> loadLatestReport(String studentId);
 }
@@ -20,25 +21,47 @@ class FirebaseAttendanceRepository implements AttendanceRepository {
 
   @override
   Future<ClassSession?> loadActiveSession(String studentId) async {
-    final snap = await _db
-        .collection('sessions')
-        .where('status', isEqualTo: 'active')
-        .where('enrolledStudentIds', arrayContains: studentId)
-        .limit(1)
-        .get();
+    // Step 1 — get the student's enrolled class IDs.
+    final userDoc = await _db.collection('users').doc(studentId).get();
+    final enrolledClassIds = List<String>.from(
+      userDoc.data()?['enrolledClassIds'] as List? ?? [],
+    );
+    if (enrolledClassIds.isEmpty) return null;
 
-    if (snap.docs.isEmpty) return null;
+    // Step 2 — run one simple query per enrolled class (max 10 in parallel).
+    // Using per-class equality queries avoids the whereIn + where combination
+    // that Firestore sometimes cannot optimise without a composite index.
+    final futures = enrolledClassIds.take(10).map(
+      (classId) => _db
+          .collection('sessions')
+          .where('classId', isEqualTo: classId)
+          .where('status', isEqualTo: 'active')
+          .limit(1)
+          .get(),
+    );
 
-    final sessionDoc = snap.docs.first;
-    final sessionData = sessionDoc.data();
+    final results = await Future.wait(futures);
+    final activeDoc = results
+        .expand((snap) => snap.docs)
+        .firstOrNull;
+
+    if (activeDoc == null) return null;
+
+    final sessionData = activeDoc.data();
     final classId = sessionData['classId'] as String;
 
+    // Step 3 — fetch class details (GPS coords, room name, etc.).
     final classSnap = await _db.collection('classes').doc(classId).get();
     if (!classSnap.exists) return null;
     final classData = classSnap.data()!;
 
+    // Check whether this student has already submitted attendance.
+    final attendanceId = '${activeDoc.id}_$studentId';
+    final attendanceSnap =
+        await _db.collection('attendance').doc(attendanceId).get();
+
     return ClassSession(
-      id: sessionDoc.id,
+      id: activeDoc.id,
       classId: classId,
       classTitle: sessionData['title'] as String? ?? 'Class Session',
       roomName: classData['roomName'] as String? ?? 'Classroom',
@@ -48,6 +71,7 @@ class FirebaseAttendanceRepository implements AttendanceRepository {
       latitude: (classData['latitude'] as num).toDouble(),
       longitude: (classData['longitude'] as num).toDouble(),
       radiusMeters: (classData['radiusMeters'] as num?)?.toDouble() ?? 50,
+      alreadyAttended: attendanceSnap.exists,
     );
   }
 
@@ -57,11 +81,11 @@ class FirebaseAttendanceRepository implements AttendanceRepository {
     required ClassSession session,
     required double latitude,
     required double longitude,
+    double accuracy = 0,
   }) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) throw const AttendanceException('Not signed in.');
 
-    // Client-side geofence check (mirrors server-side logic)
     final distance = Geolocator.distanceBetween(
       latitude,
       longitude,
@@ -69,13 +93,18 @@ class FirebaseAttendanceRepository implements AttendanceRepository {
       session.longitude,
     );
 
-    if (distance > session.radiusMeters) {
+    // Give the student the benefit of the GPS accuracy margin.
+    // Only reject if, even accounting for the device's reported error,
+    // they are still definitively outside the classroom radius.
+    final effectiveDistance = (distance - accuracy).clamp(0.0, double.infinity);
+
+    if (effectiveDistance > session.radiusMeters) {
       return AttendanceSubmission(
         accepted: false,
         distanceMeters: distance,
-        message:
-            'You are ${distance.toStringAsFixed(1)} m away — outside the '
-            '${session.radiusMeters.toStringAsFixed(0)} m classroom radius.',
+        message: 'You are ${distance.toStringAsFixed(1)} m from the classroom '
+            '(±${accuracy.toStringAsFixed(0)} m GPS accuracy) — '
+            'outside the ${session.radiusMeters.toStringAsFixed(0)} m radius.',
       );
     }
 
@@ -91,6 +120,15 @@ class FirebaseAttendanceRepository implements AttendanceRepository {
         message: 'Attendance already recorded for this session.',
       );
     }
+
+    // Fetch live enrollment count from the class document so the report
+    // reflects students who joined after the session was started.
+    final classSnap =
+        await _db.collection('classes').doc(session.classId).get();
+    final enrolledIds = List<String>.from(
+      classSnap.data()?['enrolledStudentIds'] as List? ?? [],
+    );
+    final totalStudents = enrolledIds.isEmpty ? 1 : enrolledIds.length;
 
     // Write attendance + update report atomically
     await _db.runTransaction((tx) async {
@@ -109,6 +147,7 @@ class FirebaseAttendanceRepository implements AttendanceRepository {
       tx.set(attendanceRef, {
         'sessionId': session.id,
         'classId': session.classId,
+        'classTitle': session.classTitle,
         'studentId': uid,
         'studentName': student.name,
         'latitude': latitude,
@@ -121,19 +160,17 @@ class FirebaseAttendanceRepository implements AttendanceRepository {
       if (reportSnap.exists) {
         tx.update(reportRef, {
           'presentCount': FieldValue.increment(1),
+          'absentCount': FieldValue.increment(-1),
           'generatedAt': FieldValue.serverTimestamp(),
         });
       } else {
-        final enrolled = List<String>.from(
-          sessionSnap.data()?['enrolledStudentIds'] as List? ?? [],
-        );
         tx.set(reportRef, {
           'sessionId': session.id,
           'sessionTitle': session.classTitle,
           'classId': session.classId,
-          'totalStudents': enrolled.length,
+          'totalStudents': totalStudents,
           'presentCount': 1,
-          'absentCount': (enrolled.length - 1).clamp(0, enrolled.length),
+          'absentCount': (totalStudents - 1).clamp(0, totalStudents),
           'generatedAt': FieldValue.serverTimestamp(),
         });
       }
@@ -150,38 +187,45 @@ class FirebaseAttendanceRepository implements AttendanceRepository {
 
   @override
   Future<AttendanceReport> loadLatestReport(String studentId) async {
-    final userDoc = await _db.collection('users').doc(studentId).get();
-    final enrolledClassIds = List<String>.from(
-      userDoc.data()?['enrolledClassIds'] as List? ?? [],
-    );
-    if (enrolledClassIds.isEmpty) return AttendanceReport.empty();
+    // Query the student's own attendance records.
+    // Sorting is done client-side to avoid a composite index on
+    // (studentId + markedAt) which takes time to build in Firestore.
+    final snap = await _db
+        .collection('attendance')
+        .where('studentId', isEqualTo: studentId)
+        .limit(50)
+        .get();
 
-    final batch = enrolledClassIds.take(10).toList();
-    final reportSnap =
-        await _db.collection('reports').where('classId', whereIn: batch).get();
+    if (snap.docs.isEmpty) return AttendanceReport.empty();
 
-    if (reportSnap.docs.isEmpty) return AttendanceReport.empty();
-
-    // Sort client-side by generatedAt to get the most recent report
-    final sorted = reportSnap.docs.toList()
+    // Sort newest-first on the client — avoids a composite Firestore index.
+    final sortedDocs = snap.docs.toList()
       ..sort((a, b) {
         final aMs =
-            (a.data()['generatedAt'] as Timestamp?)?.millisecondsSinceEpoch ??
-            0;
+            (a.data()['markedAt'] as Timestamp?)?.millisecondsSinceEpoch ?? 0;
         final bMs =
-            (b.data()['generatedAt'] as Timestamp?)?.millisecondsSinceEpoch ??
-            0;
+            (b.data()['markedAt'] as Timestamp?)?.millisecondsSinceEpoch ?? 0;
         return bMs.compareTo(aMs);
       });
 
-    final data = sorted.first.data();
+    final entries = sortedDocs.map((doc) {
+      final d = doc.data();
+      return PersonalAttendanceEntry(
+        classTitle: d['classTitle'] as String? ??
+            d['sessionTitle'] as String? ??
+            'Class Session',
+        markedAt: (d['markedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+        distanceMeters: (d['distanceMeters'] as num?)?.toDouble() ?? 0,
+      );
+    }).toList();
+
     return AttendanceReport(
-      sessionTitle: data['sessionTitle'] as String? ?? 'Latest session',
-      totalStudents: data['totalStudents'] as int? ?? 0,
-      presentCount: data['presentCount'] as int? ?? 0,
-      absentCount: data['absentCount'] as int? ?? 0,
-      generatedAt:
-          (data['generatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      sessionTitle: 'My Attendance',
+      totalStudents: entries.length,
+      presentCount: entries.length,
+      absentCount: 0,
+      generatedAt: entries.first.markedAt,
+      entries: entries,
     );
   }
 }
@@ -214,6 +258,7 @@ class DemoAttendanceRepository implements AttendanceRepository {
     required ClassSession session,
     required double latitude,
     required double longitude,
+    double accuracy = 0,
   }) async {
     await Future<void>.delayed(const Duration(milliseconds: 500));
     final distance = Geolocator.distanceBetween(
@@ -222,13 +267,14 @@ class DemoAttendanceRepository implements AttendanceRepository {
       session.latitude,
       session.longitude,
     );
-    final accepted = distance <= session.radiusMeters;
+    final effectiveDistance = (distance - accuracy).clamp(0.0, double.infinity);
+    final accepted = effectiveDistance <= session.radiusMeters;
     final submission = AttendanceSubmission(
       accepted: accepted,
       distanceMeters: distance,
       message: accepted
-          ? 'Attendance accepted. You are ${distance.toStringAsFixed(1)}m from ${session.roomName}.'
-          : 'Attendance rejected. You are ${distance.toStringAsFixed(1)}m away, outside the ${session.radiusMeters.toStringAsFixed(0)}m classroom radius.',
+          ? 'Attendance accepted. You are ${distance.toStringAsFixed(1)} m from ${session.roomName}.'
+          : 'Attendance rejected. You are ${distance.toStringAsFixed(1)} m away, outside the ${session.radiusMeters.toStringAsFixed(0)} m classroom radius.',
     );
     _latestSubmission = submission;
     return submission;
@@ -237,13 +283,36 @@ class DemoAttendanceRepository implements AttendanceRepository {
   @override
   Future<AttendanceReport> loadLatestReport(String studentId) async {
     await Future<void>.delayed(const Duration(milliseconds: 300));
-    final present = _latestSubmission?.accepted == true ? 28 : 27;
+
+    final now = DateTime.now();
+    final demoEntries = [
+      if (_latestSubmission?.accepted == true)
+        PersonalAttendanceEntry(
+          classTitle: _demoSession.classTitle,
+          markedAt: now,
+          distanceMeters: _latestSubmission?.distanceMeters ?? 12.0,
+        ),
+      PersonalAttendanceEntry(
+        classTitle: 'Mobile Computing',
+        markedAt: now.subtract(const Duration(days: 2)),
+        distanceMeters: 8.3,
+      ),
+      PersonalAttendanceEntry(
+        classTitle: 'Database Systems',
+        markedAt: now.subtract(const Duration(days: 4)),
+        distanceMeters: 21.7,
+      ),
+    ];
+
+    if (demoEntries.isEmpty) return AttendanceReport.empty();
+
     return AttendanceReport(
-      sessionTitle: _demoSession.classTitle,
-      totalStudents: 32,
-      presentCount: present,
-      absentCount: 32 - present,
-      generatedAt: DateTime.now(),
+      sessionTitle: 'My Attendance',
+      totalStudents: demoEntries.length,
+      presentCount: demoEntries.length,
+      absentCount: 0,
+      generatedAt: demoEntries.first.markedAt,
+      entries: demoEntries,
     );
   }
 }

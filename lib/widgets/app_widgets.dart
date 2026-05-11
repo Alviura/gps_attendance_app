@@ -8,25 +8,59 @@ class ActiveSessionCard extends StatelessWidget {
     super.key,
     required this.session,
     this.onMarkAttendance,
+    this.alreadyAttended = false,
   });
 
   final ClassSession session;
   final VoidCallback? onMarkAttendance;
+  final bool alreadyAttended;
 
   @override
   Widget build(BuildContext context) {
     final timeFormat = DateFormat('h:mm a');
+    final colorScheme = Theme.of(context).colorScheme;
 
     return Card(
-      color: Theme.of(context).colorScheme.primaryContainer,
+      color: colorScheme.primaryContainer,
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Active class',
-              style: Theme.of(context).textTheme.labelLarge,
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Active class',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                ),
+                if (alreadyAttended)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade600,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.check_circle_rounded,
+                            size: 14, color: Colors.white),
+                        SizedBox(width: 4),
+                        Text(
+                          'Attended',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
             ),
             const SizedBox(height: 8),
             Text(
@@ -40,8 +74,11 @@ class ActiveSessionCard extends StatelessWidget {
               spacing: 16,
               runSpacing: 8,
               children: [
-                IconText(icon: Icons.meeting_room_rounded, text: session.roomName),
-                IconText(icon: Icons.person_rounded, text: session.lecturerName),
+                IconText(
+                    icon: Icons.meeting_room_rounded,
+                    text: session.roomName),
+                IconText(
+                    icon: Icons.person_rounded, text: session.lecturerName),
                 IconText(
                   icon: Icons.schedule_rounded,
                   text:

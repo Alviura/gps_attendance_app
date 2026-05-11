@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../services/auth_service.dart';
 import '../services/lecturer_actions.dart';
+import 'profile_screen.dart';
 
 class LecturerShell extends StatefulWidget {
   const LecturerShell({super.key, required this.authService});
@@ -20,13 +22,53 @@ class _LecturerShellState extends State<LecturerShell> {
   String get _name => widget.authService.currentUser!.name;
   bool get _isDemo => widget.authService.isDemo;
 
+  /// Tries to get the device's current GPS position for pre-filling the form.
+  Future<Position?> _fetchCurrentPosition() async {
+    try {
+      final enabled = await Geolocator.isLocationServiceEnabled();
+      if (!enabled) return null;
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) return null;
+      return await Geolocator.getCurrentPosition(
+        locationSettings:
+            const LocationSettings(accuracy: LocationAccuracy.high),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _createClassDialog() async {
+    // Fetch the lecturer's real location BEFORE opening the form so the
+    // classroom coordinates default to where the lecturer actually is.
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Getting your location…'),
+          duration: Duration(seconds: 4),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+    final pos = await _fetchCurrentPosition();
+    if (mounted) ScaffoldMessenger.of(context).clearSnackBars();
+
     final titleCtrl = TextEditingController();
     final roomCtrl = TextEditingController();
-    final latCtrl = TextEditingController(text: '6.5244');
-    final lngCtrl = TextEditingController(text: '3.3792');
+    final latCtrl = TextEditingController(
+      text: pos != null ? pos.latitude.toStringAsFixed(6) : '',
+    );
+    final lngCtrl = TextEditingController(
+      text: pos != null ? pos.longitude.toStringAsFixed(6) : '',
+    );
     final radiusCtrl = TextEditingController(text: '80');
     final formKey = GlobalKey<FormState>();
+
+    if (!mounted) return;
 
     final ok = await showModalBottomSheet<bool>(
       context: context,
@@ -70,7 +112,54 @@ class _LecturerShellState extends State<LecturerShell> {
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
+
+              // Location status pill
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: pos != null
+                      ? Colors.green.shade50
+                      : Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: pos != null
+                        ? Colors.green.shade200
+                        : Colors.orange.shade200,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      pos != null
+                          ? Icons.gps_fixed_rounded
+                          : Icons.gps_not_fixed_rounded,
+                      size: 16,
+                      color: pos != null
+                          ? Colors.green.shade700
+                          : Colors.orange.shade700,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        pos != null
+                            ? 'Classroom location set to your current position '
+                                '(±${pos.accuracy.toStringAsFixed(0)} m accuracy)'
+                            : 'Could not get GPS — enter coordinates manually below.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: pos != null
+                              ? Colors.green.shade800
+                              : Colors.orange.shade800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 16),
               TextFormField(
                 controller: titleCtrl,
                 decoration: const InputDecoration(
@@ -98,7 +187,10 @@ class _LecturerShellState extends State<LecturerShell> {
                   Expanded(
                     child: TextFormField(
                       controller: latCtrl,
-                      decoration: const InputDecoration(labelText: 'Latitude'),
+                      decoration: const InputDecoration(
+                        labelText: 'Latitude',
+                        prefixIcon: Icon(Icons.my_location_rounded, size: 18),
+                      ),
                       keyboardType: const TextInputType.numberWithOptions(
                           decimal: true, signed: true),
                       textInputAction: TextInputAction.next,
@@ -110,7 +202,10 @@ class _LecturerShellState extends State<LecturerShell> {
                   Expanded(
                     child: TextFormField(
                       controller: lngCtrl,
-                      decoration: const InputDecoration(labelText: 'Longitude'),
+                      decoration: const InputDecoration(
+                        labelText: 'Longitude',
+                        prefixIcon: Icon(Icons.my_location_rounded, size: 18),
+                      ),
                       keyboardType: const TextInputType.numberWithOptions(
                           decimal: true, signed: true),
                       textInputAction: TextInputAction.next,
@@ -126,7 +221,8 @@ class _LecturerShellState extends State<LecturerShell> {
                 decoration: const InputDecoration(
                   labelText: 'Geofence radius (meters)',
                   prefixIcon: Icon(Icons.radio_button_unchecked_rounded),
-                  helperText: 'Area students must be within to mark attendance',
+                  helperText:
+                      'Area students must be within to mark attendance',
                 ),
                 keyboardType: TextInputType.number,
                 validator: (v) =>
@@ -256,6 +352,228 @@ class _LecturerShellState extends State<LecturerShell> {
     );
   }
 
+  Future<void> _updateClassLocationDialog(
+    String classId,
+    double currentLat,
+    double currentLng,
+    double currentRadius,
+  ) async {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Getting your location…'),
+          duration: Duration(seconds: 4),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+    final pos = await _fetchCurrentPosition();
+    if (mounted) ScaffoldMessenger.of(context).clearSnackBars();
+
+    final latCtrl = TextEditingController(
+      text: pos != null
+          ? pos.latitude.toStringAsFixed(6)
+          : currentLat.toStringAsFixed(6),
+    );
+    final lngCtrl = TextEditingController(
+      text: pos != null
+          ? pos.longitude.toStringAsFixed(6)
+          : currentLng.toStringAsFixed(6),
+    );
+    final radiusCtrl =
+        TextEditingController(text: currentRadius.toStringAsFixed(0));
+    final formKey = GlobalKey<FormState>();
+
+    if (!mounted) return;
+
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(
+          24, 24, 24, MediaQuery.of(ctx).viewInsets.bottom + 24,
+        ),
+        child: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Theme.of(ctx).colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      Icons.edit_location_alt_rounded,
+                      color: Theme.of(ctx).colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Update Classroom Location',
+                    style: Theme.of(ctx).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              // Location status pill
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: pos != null
+                      ? Colors.green.shade50
+                      : Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: pos != null
+                        ? Colors.green.shade200
+                        : Colors.orange.shade200,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      pos != null
+                          ? Icons.gps_fixed_rounded
+                          : Icons.gps_not_fixed_rounded,
+                      size: 16,
+                      color: pos != null
+                          ? Colors.green.shade700
+                          : Colors.orange.shade700,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        pos != null
+                            ? 'Pre-filled with your current GPS position '
+                                '(±${pos.accuracy.toStringAsFixed(0)} m accuracy)'
+                            : 'Could not get GPS — previous coordinates kept. Edit manually if needed.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: pos != null
+                              ? Colors.green.shade800
+                              : Colors.orange.shade800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: latCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Latitude',
+                        prefixIcon:
+                            Icon(Icons.my_location_rounded, size: 18),
+                      ),
+                      keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true, signed: true),
+                      textInputAction: TextInputAction.next,
+                      validator: (v) =>
+                          double.tryParse(v ?? '') == null ? 'Invalid' : null,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
+                      controller: lngCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Longitude',
+                        prefixIcon:
+                            Icon(Icons.my_location_rounded, size: 18),
+                      ),
+                      keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true, signed: true),
+                      textInputAction: TextInputAction.next,
+                      validator: (v) =>
+                          double.tryParse(v ?? '') == null ? 'Invalid' : null,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: radiusCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Geofence radius (meters)',
+                  prefixIcon:
+                      Icon(Icons.radio_button_unchecked_rounded),
+                ),
+                keyboardType: TextInputType.number,
+                validator: (v) =>
+                    double.tryParse(v ?? '') == null ? 'Invalid radius' : null,
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () {
+                        if (formKey.currentState!.validate()) {
+                          Navigator.pop(ctx, true);
+                        }
+                      },
+                      icon: const Icon(Icons.save_rounded),
+                      label: const Text('Save'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (ok != true || !mounted) return;
+
+    try {
+      await LecturerActions.updateClassLocation(
+        classId: classId,
+        latitude: double.parse(latCtrl.text.trim()),
+        longitude: double.parse(lngCtrl.text.trim()),
+        radiusMeters: double.parse(radiusCtrl.text.trim()),
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Classroom location updated.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        setState(() => _reloadNonce++);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed: $e')),
+        );
+      }
+    }
+  }
+
   Future<void> _startSession(String classId, String classTitle) async {
     try {
       if (!_isDemo) {
@@ -356,13 +674,7 @@ class _LecturerShellState extends State<LecturerShell> {
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            tooltip: 'Sign out',
-            onPressed: widget.authService.signOut,
-            icon: const Icon(Icons.logout_rounded),
-          ),
-        ],
+        actions: const [],
       ),
       body: [
         _ClassesTab(
@@ -371,6 +683,8 @@ class _LecturerShellState extends State<LecturerShell> {
           isDemo: _isDemo,
           onCreateClass: _createClassDialog,
           onStartSession: _startSession,
+          onGoToSessions: () => setState(() => _index = 1),
+          onUpdateLocation: _updateClassLocationDialog,
         ),
         _SessionsTab(
           uid: _uid,
@@ -379,6 +693,10 @@ class _LecturerShellState extends State<LecturerShell> {
           onEndSession: _confirmEndSession,
         ),
         _ReportsTab(uid: _uid, reloadNonce: _reloadNonce, isDemo: _isDemo),
+        ProfileScreen(
+          user: widget.authService.currentUser!,
+          authService: widget.authService,
+        ),
       ][_index],
       floatingActionButton: _index == 0
           ? FloatingActionButton.extended(
@@ -406,6 +724,11 @@ class _LecturerShellState extends State<LecturerShell> {
             selectedIcon: Icon(Icons.analytics_rounded),
             label: 'Reports',
           ),
+          NavigationDestination(
+            icon: Icon(Icons.person_outline_rounded),
+            selectedIcon: Icon(Icons.person_rounded),
+            label: 'Profile',
+          ),
         ],
       ),
     );
@@ -421,6 +744,8 @@ class _ClassesTab extends StatelessWidget {
     required this.isDemo,
     required this.onCreateClass,
     required this.onStartSession,
+    required this.onGoToSessions,
+    required this.onUpdateLocation,
   });
 
   final String uid;
@@ -428,6 +753,25 @@ class _ClassesTab extends StatelessWidget {
   final bool isDemo;
   final VoidCallback onCreateClass;
   final void Function(String classId, String title) onStartSession;
+  final VoidCallback onGoToSessions;
+  final void Function(
+      String classId, double lat, double lng, double radius) onUpdateLocation;
+
+  static Future<(List<Map<String, dynamic>>, Set<String>)> _loadData(
+      String uid) async {
+    final results = await Future.wait([
+      LecturerActions.listClasses(uid),
+      LecturerActions.listSessions(uid),
+    ]);
+    final classes = results[0];
+    final sessions = results[1];
+    // Build the set of classIds that currently have an active session
+    final activeClassIds = {
+      for (final s in sessions)
+        if ((s['status'] as String?) == 'active') s['classId'] as String,
+    };
+    return (classes, activeClassIds);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -442,20 +786,22 @@ class _ClassesTab extends StatelessWidget {
       );
     }
 
-    return FutureBuilder<List<Map<String, dynamic>>>(
+    return FutureBuilder<(List<Map<String, dynamic>>, Set<String>)>(
       key: ValueKey(reloadNonce),
-      future: LecturerActions.listClasses(uid),
+      future: _loadData(uid),
       builder: (context, snap) {
         if (snap.hasError) return _ErrorCard(error: snap.error.toString());
         if (!snap.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
-        final classes = snap.data!;
+        final (classes, activeClassIds) = snap.data!;
+        final anySessionActive = activeClassIds.isNotEmpty;
         if (classes.isEmpty) {
           return _EmptyState(
             icon: Icons.class_outlined,
             title: 'No classes yet',
-            message: 'Create your first class and share the join code with your students.',
+            message:
+                'Create your first class and share the join code with your students.',
             actionLabel: 'Create class',
             onAction: onCreateClass,
           );
@@ -463,17 +809,32 @@ class _ClassesTab extends StatelessWidget {
         return ListView.separated(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
           itemCount: classes.length,
-          separatorBuilder: (_, _) => const SizedBox(height: 12),
+          separatorBuilder: (_, __) => const SizedBox(height: 12),
           itemBuilder: (context, i) {
             final data = classes[i];
+            final classId = data['id'] as String;
             final title = data['title'] as String? ?? 'Class';
             final room = data['roomName'] as String? ?? '';
             final code = data['joinCode'] as String? ?? '';
+            final hasActive = activeClassIds.contains(classId);
             return _ClassCard(
+              classId: classId,
               title: title,
               room: room,
               joinCode: code,
-              onStartSession: () => onStartSession(data['id'] as String, title),
+              latitude: (data['latitude'] as num?)?.toDouble() ?? 0,
+              longitude: (data['longitude'] as num?)?.toDouble() ?? 0,
+              radiusMeters: (data['radiusMeters'] as num?)?.toDouble() ?? 80,
+              hasActiveSession: hasActive,
+              anyOtherSessionActive: anySessionActive && !hasActive,
+              onStartSession: () => onStartSession(classId, title),
+              onViewSession: onGoToSessions,
+              onUpdateLocation: () => onUpdateLocation(
+                classId,
+                (data['latitude'] as num?)?.toDouble() ?? 0,
+                (data['longitude'] as num?)?.toDouble() ?? 0,
+                (data['radiusMeters'] as num?)?.toDouble() ?? 80,
+              ),
             );
           },
         );
@@ -484,44 +845,105 @@ class _ClassesTab extends StatelessWidget {
 
 class _ClassCard extends StatelessWidget {
   const _ClassCard({
+    required this.classId,
     required this.title,
     required this.room,
     required this.joinCode,
+    required this.latitude,
+    required this.longitude,
+    required this.radiusMeters,
+    required this.hasActiveSession,
+    required this.anyOtherSessionActive,
     required this.onStartSession,
+    required this.onViewSession,
+    required this.onUpdateLocation,
   });
 
+  final String classId;
   final String title;
   final String room;
   final String joinCode;
+  final double latitude;
+  final double longitude;
+  final double radiusMeters;
+  final bool hasActiveSession;
+  /// True when another of the lecturer's classes already has a live session.
+  final bool anyOtherSessionActive;
   final VoidCallback onStartSession;
+  final VoidCallback onViewSession;
+  final VoidCallback onUpdateLocation;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final headerColor =
+        hasActiveSession ? Colors.green.shade600 : scheme.primaryContainer;
+    final headerFg =
+        hasActiveSession ? Colors.white : scheme.onPrimaryContainer;
 
     return Card(
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Coloured header strip
+          // Coloured header strip — green when a session is live
           Container(
-            color: scheme.primaryContainer,
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            color: headerColor,
+            padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
             child: Row(
               children: [
-                Icon(Icons.class_rounded,
-                    color: scheme.onPrimaryContainer, size: 20),
+                Icon(Icons.class_rounded, color: headerFg, size: 20),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     title,
                     style: TextStyle(
-                      color: scheme.onPrimaryContainer,
+                      color: headerFg,
                       fontWeight: FontWeight.w800,
                       fontSize: 16,
                     ),
                   ),
+                ),
+                if (hasActiveSession) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.25),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          decoration: const BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        const Text(
+                          'LIVE',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                // Update location icon
+                IconButton(
+                  onPressed: onUpdateLocation,
+                  icon: Icon(Icons.edit_location_alt_rounded,
+                      color: headerFg, size: 20),
+                  tooltip: 'Update classroom location',
                 ),
               ],
             ),
@@ -589,11 +1011,47 @@ class _ClassCard extends StatelessWidget {
                 const SizedBox(height: 14),
                 SizedBox(
                   width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: onStartSession,
-                    icon: const Icon(Icons.play_arrow_rounded),
-                    label: const Text('Start session'),
-                  ),
+                  child: hasActiveSession
+                      ? OutlinedButton.icon(
+                          onPressed: onViewSession,
+                          icon: const Icon(Icons.event_rounded, size: 18),
+                          label: const Text('View active session'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.green.shade700,
+                            side: BorderSide(color: Colors.green.shade400),
+                          ),
+                        )
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            FilledButton.icon(
+                              onPressed: anyOtherSessionActive
+                                  ? null
+                                  : onStartSession,
+                              icon: const Icon(Icons.play_arrow_rounded),
+                              label: const Text('Start session'),
+                            ),
+                            if (anyOtherSessionActive) ...[
+                              const SizedBox(height: 6),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.info_outline_rounded,
+                                      size: 13,
+                                      color: scheme.onSurfaceVariant),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    'End your active session first.',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: scheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ],
+                        ),
                 ),
               ],
             ),

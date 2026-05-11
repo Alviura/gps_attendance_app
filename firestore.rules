@@ -70,7 +70,18 @@ service cloud.firestore {
         // Student updates their own enrolled class list when joining a class
         || (isSelf(userId)
           && resource.data.role == 'student'
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['enrolledClassIds']));
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['enrolledClassIds']))
+        // Lecturer updates their own display name
+        || (isSelf(userId)
+          && resource.data.role == 'lecturer'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
+          && request.resource.data.name is string)
+        // Student updates their own display name and/or matric number
+        || (isSelf(userId)
+          && resource.data.role == 'student'
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['name', 'matricNumber'])
+          && request.resource.data.name is string);
 
       allow delete: if false;
     }
@@ -85,6 +96,18 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['uid', 'lecturerRegNo', 'createdAt'])
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.lecturerRegNo == regKey;
+    }
+
+    // ── Join-code index (public read for signed-in users) ─────────────
+    // Stores {classId, lecturerId} keyed by join code so that
+    // querying by join code doesn't require broad classes read access.
+    match /join_codes/{code} {
+      allow read: if signedIn();
+      allow create: if callerIsActiveLecturer()
+        && request.resource.data.classId is string
+        && request.resource.data.lecturerId == request.auth.uid
+        && request.resource.data.title is string;
+      allow update, delete: if false;
     }
 
     // ── Classes ───────────────────────────────────────────────────────
@@ -106,19 +129,24 @@ service cloud.firestore {
         && request.resource.data.enrolledStudentIds.size() == 0;
 
       // Student joins a class (only enrolledStudentIds may change)
-      allow update: if callerIsStudent()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['enrolledStudentIds']);
+      allow update: if
+        (callerIsStudent()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['enrolledStudentIds']))
+        // Lecturer updates GPS location / radius of their own class
+        || (callerIsActiveLecturer()
+          && resource.data.lecturerId == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['latitude', 'longitude', 'radiusMeters']));
 
       allow delete: if false;
     }
 
     // ── Sessions ──────────────────────────────────────────────────────
     match /sessions/{sessionId} {
-      allow read: if signedIn() && (
-        request.auth.uid in resource.data.enrolledStudentIds
-        || resource.data.lecturerId == request.auth.uid
-        || callerIsAdmin()
-      );
+      // Any authenticated user can read session metadata.
+      // Students discover sessions via classId queries (not enrolledStudentIds),
+      // so the old per-doc enrollment check would block late-joining students.
+      allow read: if signedIn();
 
       // Active lecturer starts a session for their class
       allow create: if callerIsActiveLecturer()
@@ -136,8 +164,10 @@ service cloud.firestore {
 
     // ── Attendance ────────────────────────────────────────────────────
     match /attendance/{attendanceId} {
-      allow read: if signedIn()
-        && (resource.data.studentId == request.auth.uid || callerIsAdmin());
+      // Broad read so the duplicate-submission pre-check works even when the
+      // document doesn't yet exist (resource.data is null for non-existent docs,
+      // which would make resource.data.studentId throw a rules error → denied).
+      allow read: if signedIn();
 
       // Student marks their own attendance with biometric verification
       allow create: if callerIsStudent()
@@ -150,11 +180,10 @@ service cloud.firestore {
 
     // ── Reports ───────────────────────────────────────────────────────
     match /reports/{sessionId} {
-      allow read: if signedIn() && (
-        get(/databases/$(database)/documents/sessions/$(sessionId)).data.lecturerId == request.auth.uid
-        || request.auth.uid in get(/databases/$(database)/documents/sessions/$(sessionId)).data.enrolledStudentIds
-        || callerIsAdmin()
-      );
+      // Any authenticated user can read report summaries.
+      // Needed so the submitAttendance transaction can read the report
+      // doc regardless of whether the student was in enrolledStudentIds.
+      allow read: if signedIn();
 
       // Report is created or updated atomically when student marks attendance
       allow create, update: if callerIsStudent();

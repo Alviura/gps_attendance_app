@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../app/app_branding.dart';
+
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key, required this.onDone});
 
@@ -10,136 +12,238 @@ class SplashScreen extends StatefulWidget {
 }
 
 class _SplashScreenState extends State<SplashScreen>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-  late final Animation<double> _fade;
-  late final Animation<double> _scale;
+    with TickerProviderStateMixin {
+  late final AnimationController _logoCtrl;
+  late final AnimationController _ringCtrl;
+  late final Animation<double> _logoFade;
+  late final Animation<double> _logoSlide;
+  late final Animation<double> _ringPhase;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(
+
+    _logoCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 900),
+      duration: const Duration(milliseconds: 1100),
     );
+    _ringCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2400),
+    )..repeat();
 
-    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeIn);
-    _scale = Tween<double>(begin: 0.75, end: 1.0).animate(
-      CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack),
+    _logoFade = CurvedAnimation(parent: _logoCtrl, curve: Curves.easeOut);
+    _logoSlide = Tween<double>(begin: 24, end: 0).animate(
+      CurvedAnimation(parent: _logoCtrl, curve: Curves.easeOutCubic),
     );
+    _ringPhase = CurvedAnimation(parent: _ringCtrl, curve: Curves.linear);
 
-    _ctrl.forward();
+    _logoCtrl.forward();
 
-    // Hold for 2 seconds total then hand off
-    Future.delayed(const Duration(milliseconds: 2200), () {
+    Future.delayed(const Duration(milliseconds: 2600), () {
       if (mounted) widget.onDone();
     });
   }
 
   @override
   void dispose() {
-    _ctrl.dispose();
+    _logoCtrl.dispose();
+    _ringCtrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
     return Scaffold(
-      backgroundColor: scheme.primary,
-      body: Stack(
-        children: [
-          // Decorative background circles
-          Positioned(
-            top: -60,
-            right: -60,
-            child: _Circle(size: 220, color: scheme.onPrimary.withValues(alpha: 0.06)),
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(AppBranding.splashGradientA),
+              Color(AppBranding.splashGradientB),
+              Color(AppBranding.splashGradientC),
+            ],
+            stops: [0.0, 0.52, 1.0],
           ),
-          Positioned(
-            bottom: -80,
-            left: -80,
-            child: _Circle(size: 280, color: scheme.onPrimary.withValues(alpha: 0.06)),
-          ),
+        ),
+        child: Stack(
+          children: [
+            // Soft blobs
+            Positioned(
+              top: -80,
+              right: -40,
+              child: _GlowBlob(
+                size: 220,
+                color: Colors.white.withValues(alpha: 0.07),
+              ),
+            ),
+            Positioned(
+              bottom: 120,
+              left: -60,
+              child: _GlowBlob(
+                size: 260,
+                color: const Color(AppBranding.brandAccentColorValue)
+                    .withValues(alpha: 0.06),
+              ),
+            ),
 
-          // Centred content
-          Center(
-            child: FadeTransition(
-              opacity: _fade,
-              child: ScaleTransition(
-                scale: _scale,
+            // Radar rings
+            Center(
+              child: AnimatedBuilder(
+                animation: _ringPhase,
+                builder: (context, _) {
+                  return CustomPaint(
+                    size: const Size(280, 280),
+                    painter: _PulseRingsPainter(phase: _ringPhase.value),
+                  );
+                },
+              ),
+            ),
+
+            // Brand block
+            Center(
+              child: FadeTransition(
+                opacity: _logoFade,
+                child: AnimatedBuilder(
+                  animation: _logoSlide,
+                  builder: (context, child) {
+                    return Transform.translate(
+                      offset: Offset(0, _logoSlide.value),
+                      child: child,
+                    );
+                  },
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Mark
+                      Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          Container(
+                            width: 100,
+                            height: 100,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: LinearGradient(
+                                colors: [
+                                  Colors.white.withValues(alpha: 0.22),
+                                  Colors.white.withValues(alpha: 0.08),
+                                ],
+                              ),
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.35),
+                                width: 1.2,
+                              ),
+                            ),
+                          ),
+                          Icon(
+                            Icons.touch_app_rounded,
+                            size: 44,
+                            color: Colors.white.withValues(alpha: 0.95),
+                          ),
+                          Positioned(
+                            bottom: 18,
+                            right: 18,
+                            child: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: const Color(
+                                    AppBranding.brandAccentColorValue),
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: const Color(
+                                            AppBranding.brandAccentColorValue)
+                                        .withValues(alpha: 0.45),
+                                    blurRadius: 12,
+                                  ),
+                                ],
+                              ),
+                              child: const Icon(
+                                Icons.near_me_rounded,
+                                size: 14,
+                                color: Color(AppBranding.splashIconOnAccent),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 28),
+                      Text(
+                        AppBranding.appName,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.98),
+                          fontSize: 36,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1.2,
+                          height: 1,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 40),
+                        child: Text(
+                          AppBranding.splashTagline,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.72),
+                            fontSize: 15,
+                            height: 1.35,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+            // Bottom bar
+            Positioned(
+              left: 32,
+              right: 32,
+              bottom: 40,
+              child: FadeTransition(
+                opacity: _logoFade,
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    // App icon
-                    Container(
-                      width: 96,
-                      height: 96,
-                      decoration: BoxDecoration(
-                        color: scheme.onPrimary.withValues(alpha: 0.15),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.location_on_rounded,
-                        size: 52,
-                        color: scheme.onPrimary,
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        minHeight: 3,
+                        backgroundColor: Colors.white.withValues(alpha: 0.15),
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          Colors.white.withValues(alpha: 0.65),
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 24),
-
-                    // App name
+                    const SizedBox(height: 12),
                     Text(
-                      'GPS Attendance',
+                      'Loading…',
                       style: TextStyle(
-                        color: scheme.onPrimary,
-                        fontSize: 28,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-
-                    // Tagline
-                    Text(
-                      'Smart attendance for smart classrooms',
-                      style: TextStyle(
-                        color: scheme.onPrimary.withValues(alpha: 0.75),
-                        fontSize: 14,
+                        color: Colors.white.withValues(alpha: 0.45),
+                        fontSize: 12,
+                        letterSpacing: 0.8,
                       ),
                     ),
                   ],
                 ),
               ),
             ),
-          ),
-
-          // Loading indicator at the bottom
-          Positioned(
-            bottom: 48,
-            left: 0,
-            right: 0,
-            child: FadeTransition(
-              opacity: _fade,
-              child: Center(
-                child: SizedBox(
-                  width: 32,
-                  height: 32,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.5,
-                    color: scheme.onPrimary.withValues(alpha: 0.6),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 }
 
-class _Circle extends StatelessWidget {
-  const _Circle({required this.size, required this.color});
+class _GlowBlob extends StatelessWidget {
+  const _GlowBlob({required this.size, required this.color});
   final double size;
   final Color color;
 
@@ -148,7 +252,32 @@ class _Circle extends StatelessWidget {
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      decoration: BoxDecoration(shape: BoxShape.circle, color: color),
     );
+  }
+}
+
+class _PulseRingsPainter extends CustomPainter {
+  _PulseRingsPainter({required this.phase});
+  final double phase;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = Offset(size.width / 2, size.height / 2);
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+
+    for (var i = 0; i < 4; i++) {
+      final t = (phase + i * 0.22) % 1.0;
+      final radius = 40 + t * 120;
+      paint.color = Colors.white.withValues(alpha: (1 - t) * 0.35);
+      canvas.drawCircle(c, radius, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _PulseRingsPainter oldDelegate) {
+    return oldDelegate.phase != phase;
   }
 }

@@ -1,11 +1,11 @@
 {
-    "name": "gps_attendance_app",
-    "short_name": "gps_attendance_app",
+    "name": "SpotRoll",
+    "short_name": "SpotRoll",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#0E7490",
+    "theme_color": "#0891B2",
+    "description": "SpotRoll — location-aware classroom attendance.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

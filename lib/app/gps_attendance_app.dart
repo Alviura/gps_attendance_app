@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'app_branding.dart';
 import '../screens/home_screen.dart';
 import '../screens/splash_screen.dart';
 import '../services/backend_status.dart';
@@ -15,12 +16,13 @@ class GpsAttendanceApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF0E6B5C),
+      seedColor: const Color(AppBranding.seedColorValue),
+      brightness: Brightness.light,
     );
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'GPS Attendance',
+      title: AppBranding.appName,
       theme: ThemeData(
         colorScheme: colorScheme,
         useMaterial3: true,
